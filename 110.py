@@ -110,17 +110,18 @@ def calculate_automorphism_group(G):
     return automorphisms
 
 # Parâmetros do autômato celular
-n = 10  # Número de células
+n = 4  # Número de células
 num_steps = 1  # Número de passos de simulação
 
 # Gerar o grafo e simular o autômato celular
 G, states_history = generate_cellular_automaton(n, num_steps)
-
+print("gerado")
 # Calcular o grupo de automorfismo
 automorphisms = calculate_automorphism_group(G)
+print("calculado")
 print("Número de automorfismos:", len(automorphisms))
-for i, aut in enumerate(automorphisms):
-    print(f"Automorfismo {i+1}: {aut}")
+# for i, aut in enumerate(automorphisms):
+#     print(f"Automorfismo {i+1}: {aut}")
 
 # Plotar o autômato celular
 plot_cellular_automaton(G, states_history)
