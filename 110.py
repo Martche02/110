@@ -1,6 +1,6 @@
 import networkx as nx
 import matplotlib.pyplot as plt
-from networkx.drawing.nx_agraph import graphviz_layout
+from networkx.algorithms.isomorphism import GraphMatcher
 
 # Função para aplicar a Regra 110
 def apply_rule_110(left, center, right):
@@ -84,7 +84,7 @@ def generate_cellular_automaton(n, num_steps):
 
 # Função para plotar o grafo do autômato celular
 def plot_cellular_automaton(G, states_history):
-    pos = graphviz_layout(G, prog='dot')
+    pos = nx.spring_layout(G)  # Layout ajustado para uma melhor visualização
     labels = {node: node for node in G.nodes()}
 
     plt.figure(figsize=(12, 8))
@@ -103,12 +103,24 @@ def plot_cellular_automaton(G, states_history):
     plt.axis('off')
     plt.show()
 
+# Função para calcular o grupo de automorfismo
+def calculate_automorphism_group(G):
+    GM = GraphMatcher(G, G)
+    automorphisms = list(GM.isomorphisms_iter())
+    return automorphisms
+
 # Parâmetros do autômato celular
-n = 6  # Número de células
+n = 10  # Número de células
 num_steps = 1  # Número de passos de simulação
 
 # Gerar o grafo e simular o autômato celular
 G, states_history = generate_cellular_automaton(n, num_steps)
+
+# Calcular o grupo de automorfismo
+automorphisms = calculate_automorphism_group(G)
+print("Número de automorfismos:", len(automorphisms))
+for i, aut in enumerate(automorphisms):
+    print(f"Automorfismo {i+1}: {aut}")
 
 # Plotar o autômato celular
 plot_cellular_automaton(G, states_history)
