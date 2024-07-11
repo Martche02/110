@@ -1,6 +1,8 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 from networkx.algorithms.isomorphism import GraphMatcher
+from sympy.combinatorics import Permutation, PermutationGroup
+from sympy.combinatorics.named_groups import SymmetricGroup, AlternatingGroup, CyclicGroup, DihedralGroup
 
 # Função para aplicar a Regra 110
 def apply_rule_110(left, center, right):
@@ -82,46 +84,123 @@ def generate_cellular_automaton(n, num_steps):
 
     return G, states_history
 
-# Função para plotar o grafo do autômato celular
-def plot_cellular_automaton(G, states_history):
-    pos = nx.spring_layout(G)  # Layout ajustado para uma melhor visualização
-    labels = {node: node for node in G.nodes()}
-
-    plt.figure(figsize=(12, 8))
-
-    # Plotar o grafo
-    nx.draw_networkx_nodes(G, pos, node_color='lightblue', node_size=700)
-    nx.draw_networkx_edges(G, pos, edge_color='gray', arrows=True)
-    nx.draw_networkx_labels(G, pos, labels=labels, font_size=12)
-
-    # Animação da evolução dos estados
-    for i in range(len(states_history) - 1):
-        edge_labels = {(states_history[i], states_history[i + 1]): apply_rule_110(int(states_history[i][-1]), int(states_history[i][0]), int(states_history[i][1]))}
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='red', font_size=10)
-
-    plt.title('Autômato Celular Circular - Regra 110 (1 passo)')
-    plt.axis('off')
-    plt.show()
-
 # Função para calcular o grupo de automorfismo
 def calculate_automorphism_group(G):
     GM = GraphMatcher(G, G)
     automorphisms = list(GM.isomorphisms_iter())
     return automorphisms
 
+# Função para identificar o grupo de automorfismos
+def identify_automorphism_group(automorphisms, node_labels):
+    label_to_index = {label: idx for idx, label in enumerate(node_labels)}
+    permutations = []
+    for aut in automorphisms:
+        perm = [label_to_index[aut[label]] for label in node_labels]
+        permutations.append(Permutation(perm))
+    
+    group = PermutationGroup(permutations)
+    return group
+
+# Função para identificar o grupo de automorfismos
+def identify_group(automorphism_group):
+    n = automorphism_group.degree
+    order = automorphism_group.order()
+    
+    # Verificar se é um grupo simétrico
+    if automorphism_group.is_isomorphic(SymmetricGroup(n)):
+        return f"O grupo de automorfismos é isomórfico ao Grupo Simétrico S{n}."
+    # Verificar se é um grupo alternado
+    elif automorphism_group.is_isomorphic(AlternatingGroup(n)):
+        return f"O grupo de automorfismos é isomórfico ao Grupo Alternado A{n}."
+    # Verificar se é um grupo cíclico
+    for k in range(1, n+1):
+        if automorphism_group.is_isomorphic(CyclicGroup(k)):
+            return f"O grupo de automorfismos é isomórfico ao Grupo Cíclico C{k}."
+    # Verificar se é um grupo diedral
+    for k in range(2, n+1):
+        if automorphism_group.is_isomorphic(DihedralGroup(k)):
+            return f"O grupo de automorfismos é isomórfico ao Grupo Diedral D{k}."
+    
+    return "O grupo de automorfismos não corresponde a um grupo bem conhecido."
+
+# Função para plotar o grafo do grupo de automorfismos
+def plot_automorphism_group(automorphisms):
+    aut_group = nx.DiGraph()
+
+    # Adicionar nós representando automorfismos
+    for i, aut in enumerate(automorphisms):
+        aut_group.add_node(i, permutation=aut)
+
+    # Adicionar arestas representando a composição de automorfismos
+    for i in range(len(automorphisms)):
+        for j in range(len(automorphisms)):
+            composed = compose_automorphisms(automorphisms[i], automorphisms[j])
+            for k, aut in enumerate(automorphisms):
+                if composed == aut:
+                    aut_group.add_edge(i, k)
+
+    pos = nx.spring_layout(aut_group)  # Layout ajustado para uma melhor visualização
+    labels = {i: f'Aut {i+1}' for i in aut_group.nodes()}
+
+    plt.figure(figsize=(12, 8))
+
+    # Plotar o grafo do grupo de automorfismos
+    nx.draw_networkx_nodes(aut_group, pos, node_color='lightgreen', node_size=700)
+    nx.draw_networkx_edges(aut_group, pos, edge_color='black', arrows=True)
+    nx.draw_networkx_labels(aut_group, pos, labels=labels, font_size=12)
+
+    plt.title('Grupo de Automorfismos do Grafo')
+    plt.axis('off')
+    plt.show()
+
+# Função para compor dois automorfismos
+def compose_automorphisms(aut1, aut2):
+    return {k: aut2[v] for k, v in aut1.items()}
+
+# Função para imprimir a tabela de Cayley
+def print_cayley_table(group):
+    elements = list(group.generate(af=False))
+    table = []
+    for x in elements:
+        row = []
+        for y in elements:
+            row.append(x * y)
+        table.append(row)
+    
+    header = "  | " + " | ".join(map(str, elements)) + " |"
+    print(header)
+    print("-" * len(header))
+    for elem, row in zip(elements, table):
+        print(f"{elem} | " + " | ".join(map(str, row)) + " |")
+
 # Parâmetros do autômato celular
-n = 4  # Número de células
+n = 8  # Número de células
 num_steps = 1  # Número de passos de simulação
 
 # Gerar o grafo e simular o autômato celular
 G, states_history = generate_cellular_automaton(n, num_steps)
-print("gerado")
+
 # Calcular o grupo de automorfismo
 automorphisms = calculate_automorphism_group(G)
-print("calculado")
-print("Número de automorfismos:", len(automorphisms))
-# for i, aut in enumerate(automorphisms):
-#     print(f"Automorfismo {i+1}: {aut}")
 
-# Plotar o autômato celular
-plot_cellular_automaton(G, states_history)
+# Obter rótulos dos nós para mapeamento
+node_labels = list(G.nodes())
+
+# Identificar o grupo de automorfismos
+automorphism_group = identify_automorphism_group(automorphisms, node_labels)
+
+# Exibir informações sobre o grupo de automorfismos
+print("Número de automorfismos:", len(automorphism_group.generators))
+print("Ordem do grupo de automorfismos:", automorphism_group.order())
+print("Geradores do grupo de automorfismos:", automorphism_group.generators)
+
+# Plotar o grupo de automorfismos
+plot_automorphism_group(automorphisms)
+
+# Identificar o grupo
+group_type = identify_group(automorphism_group)
+print(group_type)
+
+# Imprimir a tabela de Cayley
+print("Tabela de Cayley:")
+print_cayley_table(automorphism_group)
