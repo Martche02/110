@@ -1,11 +1,17 @@
 import networkx as nx
-import matplotlib.pyplot as plt
 from networkx.algorithms.isomorphism import GraphMatcher
 from sympy.combinatorics import Permutation, PermutationGroup
-from joblib import Parallel, delayed
+import csv
+import threading
+import time
+from queue import Queue, Empty
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from numba import cuda, njit
+import numpy as np
 
-# Função para aplicar uma regra geral
-def apply_rule(left, center, right, rule_binary):
+# Função para aplicar uma regra geral usando Numba
+@njit
+def apply_rule_numba(left, center, right, rule_binary):
     index = (left << 2) | (center << 1) | right
     return int(rule_binary[7 - index])
 
@@ -20,52 +26,48 @@ def canonical_form(state):
     return min_state
 
 # Função para gerar o grafo do autômato celular circular
-def generate_cellular_automaton(n, num_steps, rule):
+def generate_cellular_automaton(n, rule):
     G = nx.DiGraph()
-
-    rule_binary = format(rule, '08b')  # Converter a regra para binário de 8 bits
+    rule_binary = np.array([int(bit) for bit in format(rule, '08b')], dtype=np.int32)  # Converter a regra para binário de 8 bits
     seen_states = set()
 
-    # Adicionar nós (estados) para cada combinação de n células
-    for i in range(2 ** n):
-        state = format(i, f'0{n}b')  # Representação binária do estado
-        canon_state = canonical_form(state)
-        if canon_state not in seen_states:
-            seen_states.add(canon_state)
-            G.add_node(canon_state)
+    @cuda.jit
+    def add_edges_cuda(states, rule_binary, results):
+        pos = cuda.grid(1)
+        if pos < states.shape[0]:
+            state = states[pos]
+            n = state.shape[0]
+            canon_state = canonical_form(state)
+            current_state = [int(bit) for bit in state]
+            next_state = cuda.local.array((n,), dtype=np.int32)
+            for i in range(n):
+                left = current_state[(i - 1) % n]
+                center = current_state[i]
+                right = current_state[(i + 1) % n]
+                next_state[i] = apply_rule_numba(left, center, right, rule_binary)
+            next_state_str = ''.join(map(str, next_state))
+            next_canon_state = canonical_form(next_state_str)
+            results[pos, 0] = int(''.join(canon_state), 2)
+            results[pos, 1] = int(next_canon_state, 2)
 
-    # Adicionar arestas (transições) entre os estados
-    def add_edges(node):
-        current_state = [int(bit) for bit in node]
-        next_state = [0] * n
-        for i in range(n):
-            left = current_state[(i - 1) % n]
-            center = current_state[i]
-            right = current_state[(i + 1) % n]
-            next_state[i] = apply_rule(left, center, right, rule_binary)
-        next_state_str = ''.join(map(str, next_state))
-        next_canon_state = canonical_form(next_state_str)
-        return (node, next_canon_state)
+    # Gerar estados iniciais
+    states = np.array([list(format(i, f'0{n}b')) for i in range(2 ** n)], dtype=np.int32)
+    results = np.zeros((states.shape[0], 2), dtype=np.int32)
 
-    edges = Parallel(n_jobs=-1)(delayed(add_edges)(node) for node in list(G.nodes()))
-    G.add_edges_from(edges)
+    # Executar em GPU
+    threads_per_block = 128
+    blocks_per_grid = (states.shape[0] + (threads_per_block - 1)) // threads_per_block
+    add_edges_cuda[blocks_per_grid, threads_per_block](states, rule_binary, results)
 
-    # Simular o autômato celular por num_steps passos
-    current_state = format(0, f'0{n}b')  # Estado inicial
-    states_history = [current_state]
-    for _ in range(num_steps):
-        next_state = [0] * n
-        for i in range(n):
-            left = int(current_state[(i - 1) % n])
-            center = int(current_state[i])
-            right = int(current_state[(i + 1) % n])
-            next_state[i] = apply_rule(left, center, right, rule_binary)
-        next_state_str = ''.join(map(str, next_state))
-        next_canon_state = canonical_form(next_state_str)
-        states_history.append(next_canon_state)
-        current_state = next_canon_state
+    for i in range(results.shape[0]):
+        state = format(results[i, 0], f'0{n}b')
+        next_state = format(results[i, 1], f'0{n}b')
+        if state not in seen_states:
+            seen_states.add(state)
+            G.add_node(state)
+            G.add_edge(state, next_state)
 
-    return G, states_history
+    return G
 
 # Função para calcular o grupo de automorfismo
 def calculate_automorphism_group(G):
@@ -84,38 +86,56 @@ def identify_automorphism_group(automorphisms, node_labels):
     group = PermutationGroup(permutations)
     return group
 
-# Função para plotar o grafo
-def plot_graph(G):
-    pos = nx.spring_layout(G)  # Layout ajustado para uma melhor visualização
+# Função para rodar com timeout
+def automorphism_group_order_worker(rule, n, queue):
+    try:
+        G = generate_cellular_automaton(n, rule)
+        automorphisms = calculate_automorphism_group(G)
+        node_labels = list(G.nodes())
+        automorphism_group = identify_automorphism_group(automorphisms, node_labels)
+        queue.put(automorphism_group.order())
+    except Exception as e:
+        queue.put(e)
 
-    plt.figure(figsize=(12, 8))
+def automorphism_group_order(rule, n):
+    queue = Queue()
+    thread = threading.Thread(target=automorphism_group_order_worker, args=(rule, n, queue))
+    thread.start()
+    thread.join(timeout=15)
+    
+    try:
+        result = queue.get_nowait()
+        if isinstance(result, Exception):
+            return "-"
+        return result
+    except Empty:
+        return "-"
 
-    # Plotar o grafo
-    nx.draw(G, pos, with_labels=True, node_color='lightblue', node_size=700, font_size=10, font_weight='bold', arrowsize=20)
-    plt.title('Grafo Direcionado dos Elementos do Conjunto')
-    plt.show()
+# Função para processar cada combinação de rule e n
+def process_rule_n(rule, n):
+    order = automorphism_group_order(rule, n)
+    return (rule, n, order)
 
-# Parâmetros do autômato celular
-n = 8  # Número de células
-num_steps = 1  # Número de passos de simulação
-rule = 110  # Regra do autômato celular
+# Função para gerar a tabela e salvar em CSV
+def generate_table_and_save():
+    with open('automorphism_groups.csv', mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Rule", "n", "Order"])
+        
+        with ThreadPoolExecutor(max_workers=4) as executor:  # Use um número apropriado de threads
+            future_to_rule_n = {executor.submit(process_rule_n, rule, n): (rule, n) 
+                                for rule in range(11,256) for n in range(3, 100)}  # Ajuste o intervalo de n conforme necessário
+            
+            for future in as_completed(future_to_rule_n):
+                rule, n = future_to_rule_n[future]
+                try:
+                    result = future.result()
+                    writer.writerow(result)
+                    file.flush()
+                    if result[2] == "-":
+                        break
+                except Exception as e:
+                    print(f"Erro ao processar rule {rule} e n {n}: {e}")
 
-# Gerar o grafo e simular o autômato celular
-G, states_history = generate_cellular_automaton(n, num_steps, rule)
-
-# Calcular o grupo de automorfismo
-automorphisms = calculate_automorphism_group(G)
-
-# Obter rótulos dos nós para mapeamento
-node_labels = list(G.nodes())
-
-# Identificar o grupo de automorfismos
-automorphism_group = identify_automorphism_group(automorphisms, node_labels)
-
-# Exibir informações sobre o grupo de automorfismos
-unique_generators = set(tuple(gen) for gen in automorphism_group.generators)
-print("Número de geradores diferentes do grupo de automorfismos:", len(unique_generators))
-print("Ordem do grupo de automorfismos:", automorphism_group.order())
-
-# Plotar o grafo dos elementos do conjunto
-plot_graph(G)
+# Executar a função para gerar a tabela
+generate_table_and_save()
